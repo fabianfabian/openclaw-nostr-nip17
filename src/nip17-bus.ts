@@ -208,7 +208,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   // Use since set to 2 days ago to catch NIP-59 randomized timestamps
   const sub = pool.subscribeMany(
     relays,
-    [{ kinds: [1059], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
+    { kinds: [1059], "#p": [pk], since } as any,
     {
       onevent: handleEvent,
       oneose: () => {

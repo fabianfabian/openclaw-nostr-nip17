@@ -184,39 +184,60 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        onMessage: async (senderPubkey, text, reply) => {
-          ctx.log?.debug?.(`[${account.accountId}] NIP-17 DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
+        onMessage: async (senderPubkey, text, replyFn) => {
+          ctx.log?.info(`[${account.accountId}] NIP-17 DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
 
-          const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-            cfg: runtime.config.loadConfig(),
-            agentId: runtime.channel.reply.resolveAgentId({}),
+          const cfg = runtime.config.loadConfig();
+
+          // Resolve agent route for this channel
+          const route = runtime.channel.routing.resolveAgentRoute({
+            cfg,
             channel: "nostr-nip17",
             accountId: account.accountId,
+            peer: { kind: "direct", id: senderPubkey },
           });
 
+          // Build inbound context
           const ctxPayload = runtime.channel.reply.finalizeInboundContext({
             Body: text,
             RawBody: text,
             CommandBody: text,
             From: `nostr:${senderPubkey}`,
             To: `nostr:${account.publicKey}`,
+            SenderId: senderPubkey,
+            SessionKey: route.sessionKey,
+            AccountId: account.accountId,
+            ChatType: "direct",
             CommandAuthorized: true,
-            SessionKey: "main", // Target main session
+            Provider: "nostr-nip17",
+            Surface: "nostr-nip17",
+            OriginatingChannel: "nostr-nip17",
           });
 
+          // Build reply prefix options
+          const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+            cfg,
+            agentId: route.agentId,
+            channel: "nostr-nip17",
+            accountId: account.accountId,
+          });
+
+          // Dispatch reply through the full pipeline
           await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
-            cfg: runtime.config.loadConfig(),
+            cfg,
             dispatcherOptions: {
               ...prefixOptions,
-              deliver: async (payload) => {
+              onModelSelected,
+              deliver: async (payload: { text?: string; mediaPath?: string }) => {
                 const responseText = payload.text ?? "";
                 if (responseText.trim()) {
-                  await reply(responseText);
+                  await replyFn(responseText);
+                  ctx.log?.info(`[${account.accountId}] NIP-17 reply sent to ${senderPubkey}`);
                 }
               },
-              onError: (err, info) => {
-                ctx.log?.error?.(`[${account.accountId}] NIP-17 reply failed: ${String(err)}`);
+              onError: (err: unknown) => {
+                ctx.log?.error?.(`[${account.accountId}] NIP-17 reply error: ${String(err)}`);
               },
             },
           });
