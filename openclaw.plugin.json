@@ -1,0 +1,9 @@
+{
+  "id": "nostr-nip17",
+  "channels": ["nostr-nip17"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
