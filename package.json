@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/nostr-nip17",
+  "name": "fabianfabian/nostr-nip17",
   "version": "0.1.0",
   "description": "OpenClaw Nostr channel plugin for NIP-17 private direct messages",
   "type": "module",
