@@ -16,7 +16,7 @@ Private DMs for [OpenClaw](https://github.com/openclaw/openclaw) via [Nostr](htt
 
 ```bash
 # Clone
-git clone https://github.com/fabianfabian/nostr-nip17.git
+git clone https://github.com/fabianfabian/openclaw-nostr-nip17.git
 
 # Install dependencies
 cd nostr-nip17
