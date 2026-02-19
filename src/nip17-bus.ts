@@ -142,32 +142,44 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   if (state?.recentEventIds?.length) {
     for (const id of state.recentEventIds) globalDedup(`gw:${id}`);
   }
+  if (state?.recentFingerprints?.length) {
+    for (const fp of state.recentFingerprints) globalDedup(fp);
+  }
 
   await writeNostrBusState({
     accountId,
     lastProcessedAt: state?.lastProcessedAt ?? gatewayStartedAt,
     gatewayStartedAt,
     recentEventIds: state?.recentEventIds ?? [],
+    recentFingerprints: state?.recentFingerprints ?? [],
   });
 
-  let pendingWrite: ReturnType<typeof setTimeout> | undefined;
   let lastProcessedAt = state?.lastProcessedAt ?? gatewayStartedAt;
   let recentEventIds = (state?.recentEventIds ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
+  let recentFingerprints = (state?.recentFingerprints ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
 
-  function scheduleStatePersist(eventCreatedAt: number, eventId: string): void {
+  function persistStateNow(): void {
+    writeNostrBusState({
+      accountId,
+      lastProcessedAt,
+      gatewayStartedAt,
+      recentEventIds,
+      recentFingerprints,
+    }).catch((err) => onError?.(err as Error, "persist state"));
+  }
+
+  function scheduleStatePersist(eventCreatedAt: number, eventId: string, fingerprint?: string): void {
     lastProcessedAt = Math.max(lastProcessedAt, eventCreatedAt);
     recentEventIds.push(eventId);
     if (recentEventIds.length > MAX_PERSISTED_EVENT_IDS)
       recentEventIds = recentEventIds.slice(-MAX_PERSISTED_EVENT_IDS);
-    if (pendingWrite) clearTimeout(pendingWrite);
-    pendingWrite = setTimeout(() => {
-      writeNostrBusState({
-        accountId,
-        lastProcessedAt,
-        gatewayStartedAt,
-        recentEventIds,
-      }).catch((err) => onError?.(err as Error, "persist state"));
-    }, STATE_PERSIST_DEBOUNCE_MS);
+    if (fingerprint) {
+      recentFingerprints.push(fingerprint);
+      if (recentFingerprints.length > MAX_PERSISTED_EVENT_IDS)
+        recentFingerprints = recentFingerprints.slice(-MAX_PERSISTED_EVENT_IDS);
+    }
+    // Write immediately to survive restarts — dedup correctness > disk IO savings
+    persistStateNow();
   }
 
   // inflight removed — using module-level globalDedup instead
@@ -221,7 +233,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       };
 
       await onMessage(senderPubkey, text, replyFn);
-      scheduleStatePersist(event.created_at, event.id);
+      scheduleStatePersist(event.created_at, event.id, contentFingerprint);
     } catch (err) {
       onError?.(err as Error, `event ${event.id}`);
     } finally {
@@ -253,11 +265,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   return {
     close: () => {
       sub.close();
-      if (pendingWrite) {
-        clearTimeout(pendingWrite);
-        writeNostrBusState({ accountId, lastProcessedAt, gatewayStartedAt, recentEventIds })
-          .catch((err) => onError?.(err as Error, "persist state on close"));
-      }
+      persistStateNow();
     },
     publicKey: pk,
     sendDm,

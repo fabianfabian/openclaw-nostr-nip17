@@ -8,6 +8,8 @@ export interface NostrBusState {
   lastProcessedAt: number;
   gatewayStartedAt: number;
   recentEventIds: string[];
+  /** Content fingerprints for rumor-level dedup across restarts */
+  recentFingerprints?: string[];
 }
 
 function stateFilePath(accountId: string): string {
