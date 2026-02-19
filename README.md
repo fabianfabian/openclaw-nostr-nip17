@@ -2,6 +2,9 @@
 
 Private DMs for [OpenClaw](https://github.com/openclaw/openclaw) via [Nostr](https://nostr.com) using [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) gift-wrapped encryption.
 
+![Screenshot](https://nostur.com/screenshots/screenshot-openclaw-nostr.jpg "Screenshot")
+
+
 ## Features
 
 - **NIP-17 gift-wrapped DMs** — end-to-end encrypted direct messages
