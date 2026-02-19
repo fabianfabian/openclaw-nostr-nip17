@@ -260,13 +260,23 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
       activeBuses.set(account.accountId, bus);
       ctx.log?.info(`[${account.accountId}] NIP-17 provider started on ${account.relays.length} relay(s)`);
 
-      return {
-        stop: () => {
+      // Return a promise that stays pending until abort signal fires.
+      // This keeps the channel "alive" from the framework's perspective.
+      // Without this, the framework sees the resolved promise as "channel exited"
+      // and triggers the auto-restart loop.
+      return new Promise<{ stop: () => void }>((resolve) => {
+        const abortHandler = () => {
           bus.close();
           activeBuses.delete(account.accountId);
           ctx.log?.info(`[${account.accountId}] NIP-17 provider stopped`);
-        },
-      };
+          resolve({ stop: () => {} });
+        };
+        if (ctx.abortSignal?.aborted) {
+          abortHandler();
+        } else {
+          ctx.abortSignal?.addEventListener("abort", abortHandler, { once: true });
+        }
+      });
     },
   },
 };
