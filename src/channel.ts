@@ -67,8 +67,9 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
     normalizeAllowEntry: (entry) => {
       try { return normalizePubkey(entry.replace(/^nostr:/i, "")); } catch { return entry; }
     },
-    notifyApproval: async ({ id }) => {
-      const bus = activeBuses.get(DEFAULT_ACCOUNT_ID);
+    notifyApproval: async ({ id, accountId }) => {
+      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
+      const bus = activeBuses.get(aid) ?? activeBuses.get(DEFAULT_ACCOUNT_ID);
       if (bus) await bus.sendDm(id, "Your pairing request has been approved!");
     },
   },

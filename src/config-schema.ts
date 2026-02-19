@@ -2,7 +2,8 @@ import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
 
-export const Nip17ConfigSchema = z.object({
+/** Per-account config (also doubles as top-level base config). */
+export const Nip17AccountConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   privateKey: z.string().optional(),
@@ -11,4 +12,9 @@ export const Nip17ConfigSchema = z.object({
   allowFrom: z.array(allowFromEntry).optional(),
 });
 
+export const Nip17ConfigSchema = Nip17AccountConfigSchema.extend({
+  accounts: z.record(z.string(), Nip17AccountConfigSchema).optional(),
+});
+
+export type Nip17AccountConfig = z.infer<typeof Nip17AccountConfigSchema>;
 export type Nip17Config = z.infer<typeof Nip17ConfigSchema>;
