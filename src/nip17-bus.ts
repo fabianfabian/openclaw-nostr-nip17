@@ -97,6 +97,28 @@ export function isValidPubkey(input: string): boolean {
 // Main Bus - NIP-17 Gift-Wrapped DMs
 // ============================================================================
 
+// ============================================================================
+// Module-level dedup — survives across bus restarts / multiple startAccount calls
+// ============================================================================
+const globalSeen = new Set<string>();
+const GLOBAL_SEEN_MAX = 20000;
+
+function globalDedup(key: string): boolean {
+  if (globalSeen.has(key)) return true; // already seen
+  globalSeen.add(key);
+  // Trim oldest entries when too large
+  if (globalSeen.size > GLOBAL_SEEN_MAX) {
+    const toDelete = globalSeen.size - Math.floor(GLOBAL_SEEN_MAX * 0.8);
+    let deleted = 0;
+    for (const id of globalSeen) {
+      if (deleted >= toDelete) break;
+      globalSeen.delete(id);
+      deleted++;
+    }
+  }
+  return false;
+}
+
 export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusHandle> {
   const {
     privateKey,
@@ -112,16 +134,13 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
 
-  // Dedupe
-  const seen = new Set<string>();
-
   // State persistence
   const state = await readNostrBusState({ accountId });
   const baseSince = computeSinceTimestamp(state, gatewayStartedAt);
   const since = Math.max(0, baseSince - STARTUP_LOOKBACK_SEC);
 
   if (state?.recentEventIds?.length) {
-    for (const id of state.recentEventIds) seen.add(id);
+    for (const id of state.recentEventIds) globalDedup(`gw:${id}`);
   }
 
   await writeNostrBusState({
@@ -151,14 +170,13 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
     }, STATE_PERSIST_DEBOUNCE_MS);
   }
 
-  const inflight = new Set<string>();
+  // inflight removed — using module-level globalDedup instead
 
   // Handle incoming gift-wrapped events (kind 1059)
   async function handleEvent(event: Event): Promise<void> {
     try {
-      // Dedupe
-      if (seen.has(event.id) || inflight.has(event.id)) return;
-      inflight.add(event.id);
+      // Dedupe at gift-wrap level (module-global, survives restarts)
+      if (globalDedup(`gw:${event.id}`)) return;
 
       // Kind 1059 = gift wrap
       if (event.kind !== 1059) return;
@@ -175,6 +193,14 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       // We only handle kind 14 (chat messages) for now
       if (rumor.kind !== 14) return;
 
+      // Dedupe by rumor ID (same rumor arrives in different gift wraps from each relay).
+      // NIP-17 senders may create distinct rumor+seal+wrap per relay, so rumor.id
+      // can differ across copies. Use a content-based fingerprint as fallback.
+      // Dedupe at rumor level (module-global) — covers same rumor in different gift wraps
+      const contentFingerprint = `fp:${rumor.pubkey}:${rumor.content}`;
+      const rumorId = rumor.id ? `rumor:${rumor.id}` : `rumor:${rumor.pubkey}:${rumor.created_at}:${rumor.content?.slice(0, 32)}`;
+      if (globalDedup(rumorId) || globalDedup(contentFingerprint)) return;
+
       // Skip our own messages
       if (rumor.pubkey === pk) return;
 
@@ -184,8 +210,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       const staleThreshold = Math.floor(Date.now() / 1000) - STARTUP_LOOKBACK_SEC * 1.5; // Wider for randomized timestamps
       if (rumor.created_at < staleThreshold) return;
 
-      // Mark seen
-      seen.add(event.id);
+      // Already marked in globalDedup above
 
       const senderPubkey = rumor.pubkey;
       const text = rumor.content;
@@ -200,7 +225,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
     } catch (err) {
       onError?.(err as Error, `event ${event.id}`);
     } finally {
-      inflight.delete(event.id);
+      // cleanup handled by globalDedup
     }
   }
 
@@ -279,10 +304,8 @@ async function sendNip17Dm(
   }
 
   const results = await Promise.allSettled(publishPromises);
-  onError?.(new Error(`Publish results: ${results.length} total, ${results.filter(r => r.status === 'fulfilled').length} success, ${results.filter(r => r.status === 'rejected').length} failed`), 'publish');
-
   const failures = results.filter(r => r.status === 'rejected');
   if (failures.length > 0) {
-    onError?.(new Error(`Failed to publish ${failures.length} messages: ${failures.map(f => f.reason).join(', ')}`), 'publish');
+    onError?.(new Error(`Publish: ${results.length - failures.length}/${results.length} ok, failures: ${failures.map(f => (f as PromiseRejectedResult).reason).join(', ')}`), 'publish');
   }
 }
