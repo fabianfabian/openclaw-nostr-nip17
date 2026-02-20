@@ -155,6 +155,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   });
 
   let lastProcessedAt = state?.lastProcessedAt ?? gatewayStartedAt;
+  let lastRumorAt = state?.lastRumorAt ?? 0;
   let recentEventIds = (state?.recentEventIds ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
   let recentFingerprints = (state?.recentFingerprints ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
 
@@ -165,6 +166,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       gatewayStartedAt,
       recentEventIds,
       recentFingerprints,
+      lastRumorAt,
     }).catch((err) => onError?.(err as Error, "persist state"));
   }
 
@@ -216,11 +218,8 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       // Skip our own messages
       if (rumor.pubkey === pk) return;
 
-      // Skip stale events based on rumor timestamp (not gift wrap timestamp,
-      // which is randomized per NIP-59)
-      // Use a generous window since rumor timestamps are also slightly fuzzed
-      const staleThreshold = Math.floor(Date.now() / 1000) - STARTUP_LOOKBACK_SEC * 1.5; // Wider for randomized timestamps
-      if (rumor.created_at < staleThreshold) return;
+      // Skip rumors we've already seen — only process newer than last known rumor timestamp
+      if (lastRumorAt > 0 && rumor.created_at <= lastRumorAt) return;
 
       // Already marked in globalDedup above
 
@@ -233,6 +232,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       };
 
       await onMessage(senderPubkey, text, replyFn);
+      lastRumorAt = Math.max(lastRumorAt, rumor.created_at);
       scheduleStatePersist(event.created_at, event.id, contentFingerprint);
     } catch (err) {
       onError?.(err as Error, `event ${event.id}`);

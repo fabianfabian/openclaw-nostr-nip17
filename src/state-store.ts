@@ -10,6 +10,8 @@ export interface NostrBusState {
   recentEventIds: string[];
   /** Content fingerprints for rumor-level dedup across restarts */
   recentFingerprints?: string[];
+  /** Most recent rumor created_at timestamp — skip anything at or before this on restart */
+  lastRumorAt?: number;
 }
 
 function stateFilePath(accountId: string): string {
