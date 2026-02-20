@@ -142,22 +142,17 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   if (state?.recentEventIds?.length) {
     for (const id of state.recentEventIds) globalDedup(`gw:${id}`);
   }
-  if (state?.recentFingerprints?.length) {
-    for (const fp of state.recentFingerprints) globalDedup(fp);
-  }
-
   await writeNostrBusState({
     accountId,
     lastProcessedAt: state?.lastProcessedAt ?? gatewayStartedAt,
     gatewayStartedAt,
     recentEventIds: state?.recentEventIds ?? [],
-    recentFingerprints: state?.recentFingerprints ?? [],
+    lastRumorAt: state?.lastRumorAt ?? 0,
   });
 
   let lastProcessedAt = state?.lastProcessedAt ?? gatewayStartedAt;
   let lastRumorAt = state?.lastRumorAt ?? 0;
   let recentEventIds = (state?.recentEventIds ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
-  let recentFingerprints = (state?.recentFingerprints ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
 
   function persistStateNow(): void {
     writeNostrBusState({
@@ -165,21 +160,15 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       lastProcessedAt,
       gatewayStartedAt,
       recentEventIds,
-      recentFingerprints,
       lastRumorAt,
     }).catch((err) => onError?.(err as Error, "persist state"));
   }
 
-  function scheduleStatePersist(eventCreatedAt: number, eventId: string, fingerprint?: string): void {
+  function scheduleStatePersist(eventCreatedAt: number, eventId: string): void {
     lastProcessedAt = Math.max(lastProcessedAt, eventCreatedAt);
     recentEventIds.push(eventId);
     if (recentEventIds.length > MAX_PERSISTED_EVENT_IDS)
       recentEventIds = recentEventIds.slice(-MAX_PERSISTED_EVENT_IDS);
-    if (fingerprint) {
-      recentFingerprints.push(fingerprint);
-      if (recentFingerprints.length > MAX_PERSISTED_EVENT_IDS)
-        recentFingerprints = recentFingerprints.slice(-MAX_PERSISTED_EVENT_IDS);
-    }
     // Write immediately to survive restarts — dedup correctness > disk IO savings
     persistStateNow();
   }
@@ -208,12 +197,8 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       if (rumor.kind !== 14) return;
 
       // Dedupe by rumor ID (same rumor arrives in different gift wraps from each relay).
-      // NIP-17 senders may create distinct rumor+seal+wrap per relay, so rumor.id
-      // can differ across copies. Use a content-based fingerprint as fallback.
-      // Dedupe at rumor level (module-global) — covers same rumor in different gift wraps
-      const contentFingerprint = `fp:${rumor.pubkey}:${rumor.content}`;
       const rumorId = rumor.id ? `rumor:${rumor.id}` : `rumor:${rumor.pubkey}:${rumor.created_at}:${rumor.content?.slice(0, 32)}`;
-      if (globalDedup(rumorId) || globalDedup(contentFingerprint)) return;
+      if (globalDedup(rumorId)) return;
 
       // Skip our own messages
       if (rumor.pubkey === pk) return;
@@ -233,7 +218,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 
       await onMessage(senderPubkey, text, replyFn);
       lastRumorAt = Math.max(lastRumorAt, rumor.created_at);
-      scheduleStatePersist(event.created_at, event.id, contentFingerprint);
+      scheduleStatePersist(event.created_at, event.id);
     } catch (err) {
       onError?.(err as Error, `event ${event.id}`);
     } finally {
