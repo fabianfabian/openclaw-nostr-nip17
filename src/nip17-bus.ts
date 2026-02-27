@@ -142,16 +142,26 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   if (state?.recentEventIds?.length) {
     for (const id of state.recentEventIds) globalDedup(`gw:${id}`);
   }
+
+  // On restart, don't replay old backlog. Only process rumors that arrived
+  // within a short grace window before this gateway started. Anything older
+  // is considered "seen" even if we never responded — prevents the flood of
+  // old messages being replayed after an update/restart.
+  const RESTART_GRACE_SEC = 10 * 60; // 10 minutes
+  const savedLastRumorAt = state?.lastRumorAt ?? 0;
+  const minLastRumorAt = gatewayStartedAt - RESTART_GRACE_SEC;
+  const effectiveLastRumorAt = Math.max(savedLastRumorAt, minLastRumorAt);
+
   await writeNostrBusState({
     accountId,
     lastProcessedAt: state?.lastProcessedAt ?? gatewayStartedAt,
     gatewayStartedAt,
     recentEventIds: state?.recentEventIds ?? [],
-    lastRumorAt: state?.lastRumorAt ?? 0,
+    lastRumorAt: effectiveLastRumorAt,
   });
 
   let lastProcessedAt = state?.lastProcessedAt ?? gatewayStartedAt;
-  let lastRumorAt = state?.lastRumorAt ?? 0;
+  let lastRumorAt = effectiveLastRumorAt;
   let recentEventIds = (state?.recentEventIds ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
 
   function persistStateNow(): void {
