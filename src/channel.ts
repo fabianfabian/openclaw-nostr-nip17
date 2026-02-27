@@ -247,13 +247,13 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
           ctx.log?.error?.(`[${account.accountId}] NIP-17 error (${context}): ${error.message}`);
         },
         onConnect: (relay) => {
-          ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
+          ctx.log?.info?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {
-          ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
+          ctx.log?.warn?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
         },
         onEose: (relays) => {
-          ctx.log?.debug?.(`[${account.accountId}] EOSE from: ${relays}`);
+          ctx.log?.info?.(`[${account.accountId}] EOSE from: ${relays}`);
         },
       });
 
