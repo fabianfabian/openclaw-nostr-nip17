@@ -216,8 +216,6 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       // Skip rumors we've already seen — only process newer than last known rumor timestamp
       if (lastRumorAt > 0 && rumor.created_at <= lastRumorAt) return;
 
-      // Already marked in globalDedup above
-
       const senderPubkey = rumor.pubkey;
       const text = rumor.content;
 
@@ -238,20 +236,40 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 
   // Subscribe to kind 1059 (gift wraps) addressed to us
   // Use since set to 2 days ago to catch NIP-59 randomized timestamps
-  const sub = pool.subscribeMany(
-    relays,
-    { kinds: [1059], "#p": [pk], since } as any,
-    {
-      onevent: handleEvent,
-      oneose: () => {
-        onEose?.(relays.join(", "));
+  let closed = false;
+  let reconnectAttempts = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function subscribe() {
+    const subSince = Math.max(0, Math.floor(Date.now() / 1000) - STARTUP_LOOKBACK_SEC);
+    return pool.subscribeMany(
+      relays,
+      { kinds: [1059], "#p": [pk], since: subSince } as any,
+      {
+        onevent: handleEvent,
+        oneose: () => {
+          reconnectAttempts = 0; // reset backoff on successful EOSE
+          onEose?.(relays.join(", "));
+        },
+        onclose: (reason) => {
+          options.onDisconnect?.(relays.join(", "));
+          onError?.(new Error(`Subscription closed: ${reason}`), "subscription");
+          if (!closed) {
+            const delay = Math.min(5000 * Math.pow(2, reconnectAttempts), 5 * 60 * 1000);
+            reconnectAttempts++;
+            onError?.(new Error(`Reconnecting in ${delay / 1000}s (attempt ${reconnectAttempts})`), "reconnect");
+            reconnectTimer = setTimeout(() => {
+              if (!closed) {
+                activeSub = subscribe();
+              }
+            }, delay);
+          }
+        },
       },
-      onclose: (reason) => {
-        options.onDisconnect?.(relays.join(", "));
-        onError?.(new Error(`Subscription closed: ${reason}`), "subscription");
-      },
-    },
-  );
+    );
+  }
+
+  let activeSub = subscribe();
 
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
     await sendNip17Dm(pool, sk, toPubkey, text, relays, onError);
@@ -259,7 +277,9 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 
   return {
     close: () => {
-      sub.close();
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      activeSub.close();
       persistStateNow();
     },
     publicKey: pk,
@@ -302,7 +322,11 @@ async function sendNip17Dm(
   const publishPromises: Promise<any>[] = [];
   for (const wrap of [wrapForRecipient, wrapForSelf]) {
     for (const relay of relays) {
-      publishPromises.push(pool.publish([relay], wrap as any));
+      publishPromises.push(
+        pool.publish([relay], wrap as any).catch((err: unknown) => {
+          onError?.(err instanceof Error ? err : new Error(String(err)), `publish to ${relay}`);
+        })
+      );
     }
   }
 
