@@ -9,7 +9,6 @@ Private DMs for [OpenClaw](https://github.com/openclaw/openclaw) via [Nostr](htt
 
 - **NIP-17 gift-wrapped DMs** — end-to-end encrypted direct messages
 - **Multi-account support** — run multiple npubs, each bound to a different agent
-- **Relay dedup** — content-fingerprint dedup that persists across restarts
 - **Auto-reconnect** — stays connected to relays via long-lived subscriptions
 
 ## Install
@@ -90,6 +89,8 @@ Each account gets its own keypair and can be bound to a different agent:
 ```
 
 Account-level settings override the base config. `relays`, `allowFrom`, and `dmPolicy` are inherited from the top level unless explicitly set per account.
+
+Each agent npub should have their DM relay list published (kind 10050), it also helps if the profile is already published (kind 0). This extension does not automatically do this.
 
 ### Config options
 
