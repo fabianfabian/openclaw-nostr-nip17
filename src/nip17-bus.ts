@@ -1,6 +1,7 @@
 import {
   SimplePool,
   getPublicKey,
+  finalizeEvent,
   nip19,
   type Event,
 } from "nostr-tools";
@@ -130,7 +131,18 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
-  const pool = new SimplePool();
+
+  // NIP-42: automatically sign AUTH challenges, but ONLY for relays in our config.
+  // We don't want to hand signed auth events to arbitrary relays.
+  const normalizeRelayUrl = (url: string) => url.replace(/\/+$/, "").toLowerCase();
+  const trustedRelays = new Set(relays.map(normalizeRelayUrl));
+
+  const pool = new SimplePool({
+    automaticallyAuth: (url: string) => {
+      if (!trustedRelays.has(normalizeRelayUrl(url))) return undefined;
+      return (authEvent: any) => finalizeEvent(authEvent, sk);
+    },
+  });
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
 
@@ -224,7 +236,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
       // Create reply function — wrapped to prevent unhandled rejections
       const replyFn = async (responseText: string): Promise<void> => {
         try {
-          await sendNip17Dm(pool, sk, senderPubkey, responseText, relays, onError);
+          await sendNip17Dm(pool, sk, senderPubkey, responseText, relays, trustedRelays, onError);
         } catch (err) {
           onError?.(err as Error, `reply to ${senderPubkey}`);
         }
@@ -246,12 +258,16 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   let reconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // NIP-42 auth signer for subscription-level auth-required retries
+  const authSigner = (authEvent: any) => finalizeEvent(authEvent, sk);
+
   function subscribe() {
     const subSince = Math.max(0, Math.floor(Date.now() / 1000) - STARTUP_LOOKBACK_SEC);
     return pool.subscribeMany(
       relays,
       { kinds: [1059], "#p": [pk], since: subSince } as any,
       {
+        onauth: authSigner,
         onevent: (event) => { handleEvent(event).catch((err) => onError?.(err as Error, `unhandled in handleEvent ${event.id}`)); },
         oneose: () => {
           reconnectAttempts = 0; // reset backoff on successful EOSE
@@ -278,7 +294,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   let activeSub = subscribe();
 
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
-    await sendNip17Dm(pool, sk, toPubkey, text, relays, onError);
+    await sendNip17Dm(pool, sk, toPubkey, text, relays, trustedRelays, onError);
   };
 
   return {
@@ -303,10 +319,22 @@ async function sendNip17Dm(
   toPubkey: string,
   text: string,
   relays: string[],
+  trustedRelays: Set<string>,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
   const pk = getPublicKey(sk);
 
+  // NIP-42 auth signer — only signs for relays in our config to prevent privacy leaks.
+  // The auth event contains the relay URL, so a rogue relay could learn our pubkey
+  // if we blindly sign for any relay that challenges us.
+  const onauth = (authEvent: any) => {
+    const relayTag = authEvent.tags?.find((t: string[]) => t[0] === "relay");
+    const relayUrl = relayTag?.[1] ?? "";
+    if (!trustedRelays.has(relayUrl.replace(/\/+$/, "").toLowerCase())) {
+      throw new Error(`Refusing to auth against untrusted relay: ${relayUrl}`);
+    }
+    return finalizeEvent(authEvent, sk);
+  };
   // Create the kind 14 rumor (unsigned chat message)
   const chatEvent = {
     kind: 14,
