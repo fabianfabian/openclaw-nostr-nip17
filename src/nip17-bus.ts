@@ -11,6 +11,7 @@ import {
   writeNostrBusState,
   computeSinceTimestamp,
 } from "./state-store.js";
+import { getRecipientDmRelays } from "./relay-cache.js";
 
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
@@ -335,6 +336,19 @@ async function sendNip17Dm(
     }
     return finalizeEvent(authEvent, sk);
   };
+
+  // Look up the recipient's DM relays (kind 10050) and merge with ours.
+  // This ensures replies reach the recipient even if they use different relays.
+  const recipientDmRelays = await getRecipientDmRelays(pool, toPubkey, relays, onError);
+  const normalizeUrl = (u: string) => u.replace(/\/+$/, "").toLowerCase();
+  const ourRelaySet = new Set(relays.map(normalizeUrl));
+  const extraRelays = recipientDmRelays.filter(r => !ourRelaySet.has(normalizeUrl(r)));
+  const allRelays = [...relays, ...extraRelays];
+
+  if (extraRelays.length > 0) {
+    onError?.(new Error(`Adding recipient DM relays: ${extraRelays.join(", ")}`), "recipient-relays");
+  }
+
   // Create the kind 14 rumor (unsigned chat message)
   const chatEvent = {
     kind: 14,
@@ -352,18 +366,32 @@ async function sendNip17Dm(
   const sealSelf = require('nostr-tools/nip59').createSeal(rumor, sk, pk);
   const wrapForSelf = require('nostr-tools/nip59').createWrap(sealSelf, pk);
 
-  // Publish both wraps to all relays — catch both sync throws and async rejections
+  // Publish recipient's wrap to all relays (ours + theirs)
+  // Publish our self-copy wrap to only our relays
+  // Pass onauth so publishes retry after NIP-42 auth challenges (only for trusted relays)
   const publishPromises: Promise<any>[] = [];
-  for (const wrap of [wrapForRecipient, wrapForSelf]) {
-    for (const relay of relays) {
-      try {
-        const pubResults = pool.publish([relay], wrap as any);
-        for (const p of pubResults) {
-          if (p && typeof p.catch === 'function') { p.catch(() => {}); publishPromises.push(p); }
-        }
-      } catch (err) {
-        onError?.(err as Error, `publish to ${relay}`);
+
+  // Recipient wrap → all relays (ours + recipient's DM relays)
+  for (const relay of allRelays) {
+    try {
+      const pubResults = pool.publish([relay], wrapForRecipient as any, { onauth });
+      for (const p of pubResults) {
+        if (p && typeof p.catch === 'function') { p.catch(() => {}); publishPromises.push(p); }
       }
+    } catch (err) {
+      onError?.(err as Error, `publish to ${relay}`);
+    }
+  }
+
+  // Self wrap → only our relays
+  for (const relay of relays) {
+    try {
+      const pubResults = pool.publish([relay], wrapForSelf as any, { onauth });
+      for (const p of pubResults) {
+        if (p && typeof p.catch === 'function') { p.catch(() => {}); publishPromises.push(p); }
+      }
+    } catch (err) {
+      onError?.(err as Error, `publish to ${relay}`);
     }
   }
 
