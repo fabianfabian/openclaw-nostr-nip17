@@ -1,11 +1,11 @@
 import {
   buildChannelConfigSchema,
-  collectStatusIssuesFromLastError,
-  createDefaultChannelRuntimeState,
   createReplyPrefixOptions,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
+  type ChannelStatusIssue,
+  type ChannelAccountSnapshot,
 } from "openclaw/plugin-sdk";
 import { Nip17ConfigSchema } from "./config-schema.js";
 import { normalizePubkey, startNip17Bus, type Nip17BusHandle } from "./nip17-bus.js";
@@ -143,8 +143,21 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
   },
 
   status: {
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr-nip17", accounts),
+    defaultRuntime: { accountId: DEFAULT_ACCOUNT_ID } as ChannelAccountSnapshot,
+    collectStatusIssues: (accounts: ChannelAccountSnapshot[]): ChannelStatusIssue[] => {
+      const issues: ChannelStatusIssue[] = [];
+      for (const a of accounts) {
+        if (a.lastError) {
+          issues.push({
+            channel: "nostr-nip17" as any,
+            accountId: a.accountId,
+            kind: "runtime",
+            message: a.lastError,
+          });
+        }
+      }
+      return issues;
+    },
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       publicKey: snapshot.publicKey ?? null,
