@@ -12,6 +12,18 @@ import {
   computeSinceTimestamp,
 } from "./state-store.js";
 import { getRecipientDmRelays } from "./relay-cache.js";
+import {
+  parseImetaTags,
+  fetchAndDecryptBlob,
+  mediaToDataUrl,
+  deriveConversationKey,
+  type MediaAttachment,
+} from "./media-handler.js";
+import {
+  parseKind15Tags,
+  fetchAndDecryptKind15File,
+  type Kind15FileMetadata,
+} from "./kind15-handler.js";
 
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
@@ -25,6 +37,14 @@ const STATE_PERSIST_DEBOUNCE_MS = 5000;
 // Types
 // ============================================================================
 
+export interface DecryptedMedia {
+  dataUrl: string;
+  mimeType?: string;
+  originalUrl: string;
+  blurhash?: string;
+  dimensions?: { width: number; height: number };
+}
+
 export interface Nip17BusOptions {
   privateKey: string;
   relays?: string[];
@@ -33,6 +53,7 @@ export interface Nip17BusOptions {
     senderPubkey: string,
     text: string,
     reply: (text: string) => Promise<void>,
+    media?: DecryptedMedia[],
   ) => Promise<void>;
   onError?: (error: Error, context: string) => void;
   onConnect?: (relay: string) => void;
@@ -216,8 +237,8 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
         return;
       }
 
-      // We only handle kind 14 (chat messages) for now
-      if (rumor.kind !== 14) return;
+      // Handle kind 14 (chat messages) and kind 15 (file attachments)
+      if (rumor.kind !== 14 && rumor.kind !== 15) return;
 
       // Dedupe by rumor ID (same rumor arrives in different gift wraps from each relay).
       const rumorId = rumor.id ? `rumor:${rumor.id}` : `rumor:${rumor.pubkey}:${rumor.created_at}:${rumor.content?.slice(0, 32)}`;
@@ -243,7 +264,60 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
         }
       };
 
-      await onMessage(senderPubkey, text, replyFn);
+      // Parse and decrypt media attachments (if any)
+      let decryptedMedia: DecryptedMedia[] | undefined;
+      
+      if (rumor.kind === 15) {
+        // Kind 15: File message with AES-GCM encryption
+        const metadata = parseKind15Tags(rumor.tags || []);
+        if (metadata) {
+          metadata.url = rumor.content; // URL is in content for kind 15
+          try {
+            const { data, mimeType } = await fetchAndDecryptKind15File(metadata);
+            const dataUrl = mediaToDataUrl(data, mimeType);
+            
+            decryptedMedia = [{
+              dataUrl,
+              mimeType,
+              originalUrl: metadata.url,
+              blurhash: metadata.blurhash,
+              dimensions: metadata.dimensions,
+            }];
+          } catch (err) {
+            onError?.(err as Error, `decrypt kind 15 file ${metadata.url}`);
+          }
+        }
+      } else {
+        // Kind 14: Check for imeta tags (NIP-44 encrypted Blossom blobs)
+        const mediaAttachments = parseImetaTags(rumor.tags || []);
+        if (mediaAttachments.length > 0) {
+          decryptedMedia = [];
+          const conversationKey = deriveConversationKey(sk, senderPubkey);
+          
+          for (const attachment of mediaAttachments) {
+            try {
+              const { data, mimeType } = await fetchAndDecryptBlob(
+                attachment.url,
+                conversationKey,
+              );
+              const effectiveMimeType = mimeType || attachment.mimeType;
+              const dataUrl = mediaToDataUrl(data, effectiveMimeType);
+              
+              decryptedMedia.push({
+                dataUrl,
+                mimeType: effectiveMimeType,
+                originalUrl: attachment.url,
+                blurhash: attachment.blurhash,
+                dimensions: attachment.dimensions,
+              });
+            } catch (err) {
+              onError?.(err as Error, `decrypt media ${attachment.url}`);
+            }
+          }
+        }
+      }
+
+      await onMessage(senderPubkey, text, replyFn, decryptedMedia);
       lastRumorAt = Math.max(lastRumorAt, rumor.created_at);
       scheduleStatePersist(event.created_at, event.id);
     } catch (err) {
