@@ -204,7 +204,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             RawBody: text,
             CommandBody: text,
             From: `nostr:${senderPubkey}`,
-            To: `nostr:${account.publicKey}`,
+            To: senderPubkey,
             SenderId: senderPubkey,
             SessionKey: route.sessionKey,
             AccountId: account.accountId,
