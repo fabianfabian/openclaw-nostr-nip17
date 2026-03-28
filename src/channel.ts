@@ -207,10 +207,16 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
           let enhancedBody = text;
           const mediaPaths: string[] = [];
           const mediaTypes: string[] = [];
+          const attachments: any[] = [];
           
           if (hasMedia) {
-            // Create temp directory for this message
-            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nostr-nip17-"));
+            // Save to ~/.openclaw/media/nostr-nip17/ which is in the framework's
+            // allowed localRoots (assertLocalMediaAllowed whitelist).
+            // Using os.tmpdir() siblings like "openclaw-media-nostr-nip17" fails
+            // because only the preferred OpenClaw tmp dir (openclaw-<uid>) is whitelisted.
+            const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), ".openclaw");
+            const tempDir = path.join(stateDir, "media", "nostr-nip17", Date.now().toString());
+            fs.mkdirSync(tempDir, { recursive: true });
             
             for (let idx = 0; idx < media.length; idx++) {
               const m = media[idx];
@@ -231,9 +237,22 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
                 } catch (err) {
                   ctx.log?.error?.(`[${account.accountId}] Failed to decode text attachment: ${err}`);
                 }
+              } else if (m.mimeType?.startsWith("image/")) {
+                // For images, save to temp file for MediaPaths (OpenClaw handles the vision API conversion)
+                const filePath = path.join(tempDir, name);
+                try {
+                  const buffer = Buffer.from(base64Content, "base64");
+                  fs.writeFileSync(filePath, buffer);
+                  mediaPaths.push(filePath);
+                  if (m.mimeType) {
+                    mediaTypes.push(m.mimeType);
+                  }
+                  ctx.log?.info?.(`[${account.accountId}] Saved image ${name} to ${filePath} for vision API (${buffer.length} bytes)`);
+                } catch (err) {
+                  ctx.log?.error?.(`[${account.accountId}] Failed to save image: ${err}`);
+                }
               } else {
-                // For non-text (PDF, images, etc.), save to temp file and pass path
-                // OpenClaw will automatically pass these to the model's native API
+                // For other files (PDF, etc.), save to temp file and pass path
                 const filePath = path.join(tempDir, name);
                 try {
                   const buffer = Buffer.from(base64Content, "base64");
@@ -266,6 +285,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             OriginatingChannel: "nostr-nip17",
             MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
             MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+            Attachments: attachments.length > 0 ? attachments : undefined,
           });
 
           // Build reply prefix options
