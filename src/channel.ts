@@ -1,9 +1,6 @@
-import { type ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
-import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createDefaultChannelRuntimeState, createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import { formatPairingApproveHint } from "openclaw/plugin-sdk/channel-pairing";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/core";
+import { type ChannelPlugin, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/core";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import { buildChannelConfigSchema, collectStatusIssuesFromLastError, createDefaultChannelRuntimeState, formatPairingApproveHint } from "openclaw/plugin-sdk/nostr";
 import { Nip17ConfigSchema } from "./config-schema.js";
 import { normalizePubkey, startNip17Bus, type Nip17BusHandle } from "./nip17-bus.js";
 import { getNip17Runtime } from "./runtime.js";
