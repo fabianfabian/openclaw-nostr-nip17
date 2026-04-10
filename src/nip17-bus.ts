@@ -443,14 +443,16 @@ async function sendNip17Dm(
   // Publish recipient's wrap to all relays (ours + theirs)
   // Publish our self-copy wrap to only our relays
   // Pass onauth so publishes retry after NIP-42 auth challenges (only for trusted relays)
-  const publishPromises: Promise<any>[] = [];
+  const publishAttempts: Array<{ kind: "recipient" | "self"; relay: string; promise: Promise<any> }> = [];
 
   // Recipient wrap → all relays (ours + recipient's DM relays)
   for (const relay of allRelays) {
     try {
       const pubResults = pool.publish([relay], wrapForRecipient as any, { onauth });
       for (const p of pubResults) {
-        if (p && typeof p.catch === 'function') { p.catch(() => {}); publishPromises.push(p); }
+        if (p && typeof p.catch === 'function') {
+          publishAttempts.push({ kind: "recipient", relay, promise: p });
+        }
       }
     } catch (err) {
       onError?.(err as Error, `publish to ${relay}`);
@@ -462,19 +464,47 @@ async function sendNip17Dm(
     try {
       const pubResults = pool.publish([relay], wrapForSelf as any, { onauth });
       for (const p of pubResults) {
-        if (p && typeof p.catch === 'function') { p.catch(() => {}); publishPromises.push(p); }
+        if (p && typeof p.catch === 'function') {
+          publishAttempts.push({ kind: "self", relay, promise: p });
+        }
       }
     } catch (err) {
       onError?.(err as Error, `publish to ${relay}`);
     }
   }
 
-  const results = await Promise.allSettled(publishPromises);
-  const failures = results.filter(r => r.status === 'rejected');
-  if (failures.length > 0) {
-    onError?.(new Error(`Publish: ${results.length - failures.length}/${results.length} ok, failures: ${failures.map(f => (f as PromiseRejectedResult).reason).join(', ')}`), 'publish');
+  if (publishAttempts.length === 0) {
+    throw new Error("No publish attempts were started for the NIP-17 message");
   }
-  if (publishPromises.length === 0) {
-    onError?.(new Error('No publish attempts succeeded (all relays threw synchronously)'), 'publish');
+
+  const settled = await Promise.allSettled(publishAttempts.map((attempt) => attempt.promise));
+  const results = publishAttempts.map((attempt, index) => ({
+    ...attempt,
+    result: settled[index],
+  }));
+
+  const recipientResults = results.filter((entry) => entry.kind === "recipient");
+  const recipientSuccesses = recipientResults.filter((entry) => entry.result.status === "fulfilled");
+  const recipientFailures = recipientResults.filter((entry) => entry.result.status === "rejected");
+
+  if (recipientResults.length === 0) {
+    throw new Error("No recipient publish attempts were created for the NIP-17 message");
+  }
+
+  if (recipientSuccesses.length === 0) {
+    throw new Error(
+      `Recipient publish failed on all relays: ${recipientFailures.map((entry) => `${entry.relay}: ${(entry.result as PromiseRejectedResult).reason}`).join(", ")}`
+    );
+  }
+
+  const selfResults = results.filter((entry) => entry.kind === "self");
+  const selfFailures = selfResults.filter((entry) => entry.result.status === "rejected");
+  if (recipientFailures.length > 0 || selfFailures.length > 0) {
+    onError?.(
+      new Error(
+        `Publish partial success: recipient ${recipientSuccesses.length}/${recipientResults.length} ok, self ${selfResults.length - selfFailures.length}/${selfResults.length} ok`
+      ),
+      "publish"
+    );
   }
 }

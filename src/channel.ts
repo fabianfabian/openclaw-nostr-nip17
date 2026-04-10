@@ -16,6 +16,30 @@ import * as os from "os";
 
 const activeBuses = new Map<string, Nip17BusHandle>();
 
+async function ensureActiveBus(accountId: string): Promise<Nip17BusHandle> {
+  const existing = activeBuses.get(accountId);
+  if (existing) return existing;
+
+  const runtime = getNip17Runtime();
+  const cfg = runtime.config.loadConfig();
+  const account = resolveNip17Account({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`NIP-17 account ${accountId} is not configured`);
+  }
+
+  // Lazily start an outbound-capable bus when the framework has not already
+  // started this account in the current plugin instance.
+  const bus = await startNip17Bus({
+    accountId: account.accountId,
+    privateKey: account.privateKey,
+    relays: account.relays,
+    onMessage: async () => {},
+    onError: () => {},
+  });
+  activeBuses.set(account.accountId, bus);
+  return bus;
+}
+
 export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
   id: "nostr-nip17",
   meta: {
@@ -104,8 +128,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
     sendText: async ({ to, text, accountId }) => {
       const core = getNip17Runtime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
-      const bus = activeBuses.get(aid);
-      if (!bus) throw new Error(`NIP-17 bus not running for account ${aid}`);
+      const bus = await ensureActiveBus(aid);
       const tableMode = core.channel.text.resolveMarkdownTableMode({
         cfg: core.config.loadConfig(),
         channel: "nostr-nip17",
@@ -123,10 +146,8 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
     sendMedia: async ({ to, text, accountId }) => {
       // Nostr NIP-17 doesn't support media attachments natively;
       // send caption/text only as a fallback
-      const core = getNip17Runtime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
-      const bus = activeBuses.get(aid);
-      if (!bus) throw new Error(`NIP-17 bus not running for account ${aid}`);
+      const bus = await ensureActiveBus(aid);
       const normalizedTo = normalizePubkey(to);
       if (text?.trim()) {
         await bus.sendDm(normalizedTo, text);
