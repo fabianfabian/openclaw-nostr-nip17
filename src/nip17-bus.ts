@@ -159,12 +159,21 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   const normalizeRelayUrl = (url: string) => url.replace(/\/+$/, "").toLowerCase();
   const trustedRelays = new Set(relays.map(normalizeRelayUrl));
 
+  // enablePing: keeps WebSockets alive with 29s heartbeats and surfaces silent
+  //   TCP deaths as clean onclose events so the reconnect path below fires.
+  //   Without this, idle relays (nos.lol, damus, primal) silently drop the
+  //   socket after a few minutes and the bot stops receiving DMs without ever
+  //   knowing anything went wrong — no onclose, no reconnect, just deafness.
+  // enableReconnect: lets the underlying AbstractRelay resubscribe by itself
+  //   after transient drops so re-auth + re-REQ happen automatically.
   const pool = new SimplePool({
+    enablePing: true,
+    enableReconnect: true,
     automaticallyAuth: (url: string) => {
       if (!trustedRelays.has(normalizeRelayUrl(url))) return undefined;
       return (authEvent: any) => finalizeEvent(authEvent, sk);
     },
-  });
+  } as any);
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
 
@@ -332,6 +341,10 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   let closed = false;
   let reconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Safety-net: even with pings enabled, force a full close+resubscribe every
+  // REFRESH_INTERVAL_MS so nothing can silently drift for more than this window.
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
   // NIP-42 auth signer for subscription-level auth-required retries
   const authSigner = (authEvent: any) => finalizeEvent(authEvent, sk);
@@ -368,6 +381,27 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 
   let activeSub = subscribe();
 
+  function scheduleRefresh(): void {
+    if (closed) return;
+    refreshTimer = setTimeout(() => {
+      if (closed) return;
+      try {
+        onError?.(new Error(`Periodic subscription refresh (every ${REFRESH_INTERVAL_MS / 60000}min)`), "refresh");
+        // Closing the old sub triggers onclose → reconnect path, which will
+        // rebuild activeSub via subscribe(). We avoid calling subscribe()
+        // directly here to keep a single source of truth for sub creation.
+        activeSub.close();
+      } catch (err) {
+        onError?.(err as Error, "refresh-close");
+      } finally {
+        scheduleRefresh();
+      }
+    }, REFRESH_INTERVAL_MS);
+    // Don't let the refresh timer keep the process alive on its own.
+    if (typeof (refreshTimer as any)?.unref === "function") (refreshTimer as any).unref();
+  }
+  scheduleRefresh();
+
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
     await sendNip17Dm(pool, sk, toPubkey, text, relays, trustedRelays, onError);
   };
@@ -376,6 +410,7 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
     close: () => {
       closed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (refreshTimer) clearTimeout(refreshTimer);
       activeSub.close();
       persistStateNow();
     },
