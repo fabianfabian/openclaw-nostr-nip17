@@ -35,7 +35,7 @@ Verify the plugin is visible:
 
 ```bash
 openclaw plugins list
-openclaw channels status --deep
+openclaw channels status
 ```
 
 ## Configuration
