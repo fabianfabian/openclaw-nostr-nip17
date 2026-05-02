@@ -1,5 +1,5 @@
 import { type ChannelPlugin, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/core";
-import { createReplyPrefixOptions, createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import { buildChannelConfigSchema, collectStatusIssuesFromLastError, createDefaultChannelRuntimeState, formatPairingApproveHint } from "openclaw/plugin-sdk/nostr";
 import { Nip17ConfigSchema } from "./config-schema.js";
 import { normalizePubkey, startNip17Bus, type Nip17BusHandle } from "./nip17-bus.js";
@@ -17,13 +17,14 @@ import * as os from "os";
 const activeBuses = new Map<string, Nip17BusHandle>();
 
 // Visible feedback while a reply is being computed. Sent as kind:7 reactions
-// (NIP-25, gift-wrapped per NIP-17) targeting the inbound rumor. Single pass —
-// no looping; once exhausted, the row stops growing.
-const THINKING_EMOJIS = ["💭", "🧠", "🤔", "💡", "⚙️", "🔍", "📚", "⏳"];
-const THINKING_INTERVAL_MS = 5000;
+// (NIP-25, gift-wrapped per NIP-17) targeting the inbound rumor. One random
+// pick fires on reply-start; no keepalive cycle.
+const THINKING_EMOJIS = ["💭", "🧠", "🤔", "💡", "⏳"];
+const pickThinking = (): string =>
+  THINKING_EMOJIS[Math.floor(Math.random() * THINKING_EMOJIS.length)];
 
-// Event-driven reactions on top of the time-based cycle. Fired once per
-// dispatcher event, no dedup, no per-reply caps — stacking is desired UX.
+// Event-driven reactions. Fired once per dispatcher event, no dedup, no
+// per-reply caps — stacking is desired UX.
 const EVENT_EMOJI = {
   toolStart: "🔧",
   planUpdate: "📋",
@@ -222,11 +223,15 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
           const mediaDesc = hasMedia ? ` with ${media.length} media attachment(s)` : "";
           ctx.log?.info(`[${account.accountId}] NIP-17 DM from ${senderPubkey}${mediaDesc}: ${text.slice(0, 50)}...`);
 
-          // Receipt: fire-and-forget so the sender sees a reaction even if the
-          // reply pipeline guards short-circuit (pairing/policy/no-binding).
-          // Intentionally outside the typing cycle — this is a "received"
-          // signal, not a "thinking" signal.
-          void reactFn("🤙").catch(() => { /* logged via onError in bus */ });
+          // One helper for every reaction call site (receipt + onReplyStart +
+          // event-driven). reactFn already reports failures via onError.
+          const fireReaction = (emoji: string): void => {
+            void reactFn(emoji).catch(() => {});
+          };
+
+          // Receipt: fires before any guard / model selection so the sender
+          // sees something even when the reply pipeline short-circuits.
+          fireReaction("🤙");
 
           const cfg = runtime.config.loadConfig();
 
@@ -331,30 +336,6 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             accountId: account.accountId,
           });
 
-          // Thinking cycle: walk THINKING_EMOJIS once, no looping. The
-          // dispatcher invokes start() on reply-start, then re-invokes it
-          // every keepaliveIntervalMs until first deliver, NO_REPLY, or abort
-          // — at which point onCleanup fires. maxDurationMs is a safety TTL.
-          let cycleIndex = 0;
-          const typing = createTypingCallbacks({
-            start: async () => {
-              if (cycleIndex >= THINKING_EMOJIS.length) return;
-              const emoji = THINKING_EMOJIS[cycleIndex++];
-              await reactFn(emoji);
-            },
-            stop: async () => { /* no completion emoji — reply DM is the signal */ },
-            onStartError: () => { /* swallow; reactFn already reports via onError */ },
-            keepaliveIntervalMs: THINKING_INTERVAL_MS,
-            maxDurationMs: THINKING_EMOJIS.length * THINKING_INTERVAL_MS,
-          });
-
-          // Event-driven reactions: fire-and-forget so the reply path is
-          // never blocked by a slow relay. reactFn already reports failures
-          // via onError. Coexists with the time-based cycle (stacking is OK).
-          const reactOnEvent = (emoji: string): void => {
-            void reactFn(emoji).catch(() => {});
-          };
-
           // Dispatch reply through the full pipeline
           await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
@@ -362,11 +343,10 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
             dispatcherOptions: {
               ...prefixOptions,
               onModelSelected,
-              onReplyStart: typing.onReplyStart,
-              onTypingCleanup: typing.onCleanup,
-              onToolStart: () => reactOnEvent(EVENT_EMOJI.toolStart),
-              onPlanUpdate: () => reactOnEvent(EVENT_EMOJI.planUpdate),
-              onCompactionStart: () => reactOnEvent(EVENT_EMOJI.compactionStart),
+              onReplyStart: () => fireReaction(pickThinking()),
+              onToolStart: () => fireReaction(EVENT_EMOJI.toolStart),
+              onPlanUpdate: () => fireReaction(EVENT_EMOJI.planUpdate),
+              onCompactionStart: () => fireReaction(EVENT_EMOJI.compactionStart),
               deliver: async (payload: { text?: string; mediaPath?: string }) => {
                 const responseText = payload.text ?? "";
                 if (responseText.trim()) {
