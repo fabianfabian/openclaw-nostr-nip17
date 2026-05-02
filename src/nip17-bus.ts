@@ -420,14 +420,14 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
 }
 
 // ============================================================================
-// Send NIP-17 DM
+// Publish NIP-17 wrapped rumors
 // ============================================================================
 
-async function sendNip17Dm(
+async function publishWrappedRumor(
   pool: SimplePool,
   sk: Uint8Array,
   toPubkey: string,
-  text: string,
+  rumorTemplate: { kind: number; content: string; tags: string[][]; created_at?: number },
   relays: string[],
   trustedRelays: Set<string>,
   onError?: (error: Error, context: string) => void,
@@ -458,17 +458,14 @@ async function sendNip17Dm(
     onError?.(new Error(`Adding recipient DM relays: ${extraRelays.join(", ")}`), "recipient-relays");
   }
 
-  // Create the kind 14 rumor (unsigned chat message)
-  const chatEvent = {
-    kind: 14,
-    content: text,
-    tags: [["p", toPubkey]], // Only receiver
-    created_at: Math.floor(Date.now() / 1000),
+  const event = {
+    ...rumorTemplate,
+    created_at: rumorTemplate.created_at ?? Math.floor(Date.now() / 1000),
   };
 
   // Manual NIP-59: rumor → seal → wrap
   // createWrap already signs with an ephemeral key — do NOT re-sign with sk
-  const rumor = require('nostr-tools/nip59').createRumor(chatEvent, sk);
+  const rumor = require('nostr-tools/nip59').createRumor(event, sk);
   const sealRecipient = require('nostr-tools/nip59').createSeal(rumor, sk, toPubkey);
   const wrapForRecipient = require('nostr-tools/nip59').createWrap(sealRecipient, toPubkey);
 
@@ -509,7 +506,7 @@ async function sendNip17Dm(
   }
 
   if (publishAttempts.length === 0) {
-    throw new Error("No publish attempts were started for the NIP-17 message");
+    throw new Error("No publish attempts were started for the wrapped rumor");
   }
 
   const settled = await Promise.allSettled(publishAttempts.map((attempt) => attempt.promise));
@@ -523,7 +520,7 @@ async function sendNip17Dm(
   const recipientFailures = recipientResults.filter((entry) => entry.result.status === "rejected");
 
   if (recipientResults.length === 0) {
-    throw new Error("No recipient publish attempts were created for the NIP-17 message");
+    throw new Error("No recipient publish attempts were created for the wrapped rumor");
   }
 
   if (recipientSuccesses.length === 0) {
@@ -542,4 +539,24 @@ async function sendNip17Dm(
       "publish"
     );
   }
+}
+
+async function sendNip17Dm(
+  pool: SimplePool,
+  sk: Uint8Array,
+  toPubkey: string,
+  text: string,
+  relays: string[],
+  trustedRelays: Set<string>,
+  onError?: (error: Error, context: string) => void,
+): Promise<void> {
+  await publishWrappedRumor(
+    pool,
+    sk,
+    toPubkey,
+    { kind: 14, content: text, tags: [["p", toPubkey]] },
+    relays,
+    trustedRelays,
+    onError,
+  );
 }
