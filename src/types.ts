@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/nostr";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { Nip17AccountConfig, Nip17Config } from "./config-schema.js";
 import { getPublicKeyFromPrivate, DEFAULT_RELAYS } from "./nip17-bus.js";
 
