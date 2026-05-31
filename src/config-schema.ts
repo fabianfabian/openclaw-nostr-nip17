@@ -10,6 +10,7 @@ export const Nip17AccountConfigSchema = z.object({
   relays: z.array(z.string()).optional(),
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
   allowFrom: z.array(allowFromEntry).optional(),
+  groupAllowFrom: z.array(allowFromEntry).optional(),
 });
 
 export const Nip17ConfigSchema = Nip17AccountConfigSchema.extend({

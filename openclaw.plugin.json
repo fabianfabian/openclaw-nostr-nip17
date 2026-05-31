@@ -44,6 +44,19 @@
               ]
             }
           },
+          "groupAllowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
           "accounts": {
             "type": "object",
             "propertyNames": {
@@ -72,6 +85,19 @@
                   "enum": ["pairing", "allowlist", "open", "disabled"]
                 },
                 "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "groupAllowFrom": {
                   "type": "array",
                   "items": {
                     "anyOf": [
