@@ -128,7 +128,11 @@ export function normalizePubkey(input: string): string {
   if (trimmed.startsWith("npub1")) {
     const decoded = nip19.decode(trimmed);
     if (decoded.type !== "npub") throw new Error("Invalid npub key");
-    return Array.from(decoded.data as unknown as Uint8Array)
+    const data = decoded.data;
+    if (typeof data === "string" && /^[0-9a-fA-F]{64}$/.test(data)) {
+      return data.toLowerCase();
+    }
+    return Array.from(data as unknown as Uint8Array)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   }
@@ -259,8 +263,6 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
 
-  // NIP-42: automatically sign AUTH challenges, but ONLY for relays in our config.
-  // We don't want to hand signed auth events to arbitrary relays.
   const normalizeRelayUrl = (url: string) => url.replace(/\/+$/, "").toLowerCase();
   const trustedRelays = new Set(relays.map(normalizeRelayUrl));
 
@@ -271,13 +273,13 @@ export async function startNip17Bus(options: Nip17BusOptions): Promise<Nip17BusH
   //   knowing anything went wrong — no onclose, no reconnect, just deafness.
   // enableReconnect: lets the underlying AbstractRelay resubscribe by itself
   //   after transient drops so re-auth + re-REQ happen automatically.
+  // Do not pass automaticallyAuth. nostr-tools calls `this.auth(this.onauth)`
+  // without a catch; a rejected AUTH (Haven/WoT serviceUrl errors, closed
+  // sockets) becomes an unhandledRejection and OpenClaw 2026.8.2 exits.
+  // See fabianfabian/openclaw-nostr-nip17#10.
   const pool = new SimplePool({
     enablePing: true,
     enableReconnect: true,
-    automaticallyAuth: (url: string) => {
-      if (!trustedRelays.has(normalizeRelayUrl(url))) return undefined;
-      return (authEvent: any) => finalizeEvent(authEvent, sk);
-    },
   } as any);
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);

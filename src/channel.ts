@@ -1,5 +1,5 @@
 import { type ChannelPlugin, DEFAULT_ACCOUNT_ID, buildChannelConfigSchema, formatPairingApproveHint } from "openclaw/plugin-sdk/core";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { collectStatusIssuesFromLastError, createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/channel-status";
 import { Nip17ConfigSchema } from "./config-schema.js";
 import { normalizePubkey, startNip17Bus, type Nip17BusHandle } from "./nip17-bus.js";
@@ -31,12 +31,32 @@ const EVENT_EMOJI = {
   compactionStart: "🗜️",
 } as const;
 
+function readRuntimeConfig(runtime: { config?: unknown }): Record<string, unknown> {
+  const c = runtime.config as {
+    current?: () => unknown;
+    loadConfig?: () => unknown;
+    get?: () => unknown;
+  } | Record<string, unknown> | (() => unknown) | undefined;
+  if (!c) return {};
+  if (typeof c === "function") return (c() as Record<string, unknown>) ?? {};
+  if (typeof (c as { current?: unknown }).current === "function") {
+    return ((c as { current: () => unknown }).current() as Record<string, unknown>) ?? {};
+  }
+  if (typeof (c as { loadConfig?: unknown }).loadConfig === "function") {
+    return ((c as { loadConfig: () => unknown }).loadConfig() as Record<string, unknown>) ?? {};
+  }
+  if (typeof (c as { get?: unknown }).get === "function") {
+    return ((c as { get: () => unknown }).get() as Record<string, unknown>) ?? {};
+  }
+  return (c as Record<string, unknown>) ?? {};
+}
+
 async function ensureActiveBus(accountId: string): Promise<Nip17BusHandle> {
   const existing = activeBuses.get(accountId);
   if (existing) return existing;
 
   const runtime = getNip17Runtime();
-  const cfg = runtime.config.loadConfig();
+  const cfg = readRuntimeConfig(runtime);
   const account = resolveNip17Account({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`NIP-17 account ${accountId} is not configured`);
@@ -145,7 +165,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
       const bus = await ensureActiveBus(aid);
       const tableMode = core.channel.text.resolveMarkdownTableMode({
-        cfg: core.config.loadConfig(),
+        cfg: readRuntimeConfig(core),
         channel: "nostr-nip17",
         accountId: aid,
       });
@@ -233,7 +253,7 @@ export const nip17Plugin: ChannelPlugin<ResolvedNip17Account> = {
           // sees something even when the reply pipeline short-circuits.
           fireReaction("🤙");
 
-          const cfg = runtime.config.loadConfig();
+          const cfg = readRuntimeConfig(runtime);
 
           // Resolve agent route for this channel
           const route = runtime.channel.routing.resolveAgentRoute({
